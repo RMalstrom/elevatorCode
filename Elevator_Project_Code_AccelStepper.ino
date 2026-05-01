@@ -11,7 +11,7 @@
 // WIRING NOTE:
 // This sketch assumes common-anode wiring on the TB6600:
 //   PUL+, DIR+, ENA+ -> Arduino 5V
-//   PUL- -> pin 5, DIR- -> pin 6, ENA- -> pin 3 (or leave ENA disconnected)
+//   PUL- -> pin 5, DIR- -> pin 6, ENA- LEFT DISCONNECTED
 // AccelStepper drives the pins with normal HIGH/LOW; the opto inversion
 // is handled by setPinsInverted() below.
 //
@@ -29,7 +29,7 @@ const int echoPin = 10;
 // ---------- Stepper Driver Pins ----------
 const int stepPin = 5;      // PUL-
 const int dirPin = 6;       // DIR-
-const int enablePin = 3;    // ENA-  (optional; can be left disconnected)
+// NOTE: ENA- is disconnected; pin 3 is now used for the obstruction sensor.
 
 // ---------- Motion Tuning ----------
 // Steps the motor must turn to travel between adjacent floors.
@@ -44,6 +44,14 @@ const float ACCELERATION = 12000.0;   // ramp rate (steps/sec^2)
 
 // ---------- Floor Button Pins ----------
 const int floorButtonPins[4] = {2, 4, 7, 8};
+
+// ---------- Door Control Pins ----------
+// All door inputs are wired button-style: one leg on the pin, other leg to GND.
+// Active state for all three is LOW.
+const int doorLEDPin       = A0;   // illuminated whenever doors are open
+const int obstructionPin   = 3;    // door obstruction sensor (LOW = obstructed)
+const int doorOpenBtnPin   = 12;   // hold to keep doors open (LOW = pressed)
+const int doorCloseBtnPin  = 11;   // press to close immediately (LOW = pressed)
 
 // ---------- Elevator Configuration ----------
 const int NUM_FLOORS = 4;
@@ -101,11 +109,18 @@ void setup() {
     digitalWrite(floorLEDPins[i], LOW);
   }
 
+  // Door I/O. All three door inputs are wired to GND (active LOW), so all
+  // three use INPUT_PULLUP.
+  pinMode(doorLEDPin, OUTPUT);
+  digitalWrite(doorLEDPin, LOW);
+  pinMode(obstructionPin, INPUT_PULLUP);
+  pinMode(doorOpenBtnPin, INPUT_PULLUP);
+  pinMode(doorCloseBtnPin, INPUT_PULLUP);
+
   // Configure stepper.
   // setPinsInverted(directionInvert, stepInvert, enableInvert)
   // Common-anode wiring inverts step and enable logic.
   stepper.setPinsInverted(false, true, true);
-  stepper.setEnablePin(enablePin);
   stepper.setMaxSpeed(MAX_SPEED);
   stepper.setAcceleration(ACCELERATION);
   stepper.enableOutputs();
@@ -143,13 +158,39 @@ void loop() {
   // 2. Read buttons (non-blocking debounce inside).
   readButtons();
 
-  // 3. If doors are open, wait out the dwell time before doing anything else.
+  // 3. If doors are open, handle door logic (obstruction, hold-open, close button).
   if (doorsOpen) {
-    if (millis() - doorOpenedAt >= DOOR_DWELL_MS) {
+    // Defensive: door LED should ALWAYS match doorsOpen state.
+    digitalWrite(doorLEDPin, HIGH);
+
+    // All three inputs are active LOW (wired to GND).
+    bool obstructed   = (digitalRead(obstructionPin)  == LOW);
+    bool holdingOpen  = (digitalRead(doorOpenBtnPin)  == LOW);
+    bool closePressed = (digitalRead(doorCloseBtnPin) == LOW);
+
+    // Any reason to keep the doors open resets the dwell timer.
+    if (obstructed || holdingOpen) {
+      doorOpenedAt = millis();
+    }
+
+    // Decide whether to close: either the close button was pressed (and
+    // nothing is blocking), or the dwell time has elapsed naturally.
+    bool shouldClose = false;
+    if (closePressed && !obstructed && !holdingOpen) {
+      shouldClose = true;
+      Serial.println("Door close button pressed.");
+    } else if (!obstructed && !holdingOpen &&
+               (millis() - doorOpenedAt >= DOOR_DWELL_MS)) {
+      shouldClose = true;
+    }
+
+    if (shouldClose) {
       doorsOpen = false;
+      digitalWrite(doorLEDPin, LOW);
       Serial.println("Doors close.");
       chooseNextTarget();
     }
+
     return;  // keep stepper.run() ticking via next loop iteration
   }
 
@@ -295,6 +336,7 @@ void arriveAtFloor(int floor) {
   Serial.println("Doors open...");
   doorsOpen = true;
   doorOpenedAt = millis();
+  digitalWrite(doorLEDPin, HIGH);
 }
 
 // ==============================
