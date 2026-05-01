@@ -205,6 +205,17 @@ void loop() {
     chooseNextTarget();
   }
 
+  // 5b. Reopen doors if door-open button is pressed while idle at a floor.
+  if (targetFloor < 0 && !doorsOpen) {
+    if (digitalRead(doorOpenBtnPin) == LOW) {
+      Serial.println("Door open button pressed - reopening doors.");
+      doorsOpen = true;
+      doorOpenedAt = millis();
+      digitalWrite(doorLEDPin, HIGH);
+      lastActivityTime = millis();
+    }
+  }
+
   // 6. Idle return-to-lobby logic.
   if (!hasAnyRequests() && targetFloor < 0) {
     direction = IDLE;
